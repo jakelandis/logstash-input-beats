@@ -9,6 +9,9 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
+import io.netty.util.concurrent.RejectedExecutionHandler;
+import io.netty.util.concurrent.RejectedExecutionHandlers;
+import io.netty.util.concurrent.SingleThreadEventExecutor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.logstash.netty.SslSimpleBuilder;
@@ -24,18 +27,23 @@ public class Server {
     private final NioEventLoopGroup workGroup;
     private final String host;
     private final int beatsHeandlerThreadCount;
+    private final int maxPendingBatchesPerEventLoop;
     private IMessageListener messageListener = new MessageListener();
     private SslSimpleBuilder sslBuilder;
     private BeatsInitializer beatsInitializer;
 
     private final int clientInactivityTimeoutSeconds;
 
-    public Server(String host, int p, int timeout, int threadCount) {
+    static long lastRejectMessage = System.currentTimeMillis();
+
+    public Server(String host, int p, int timeout, int threadCount, int maxPendingBatches) {
         this.host = host;
         port = p;
         clientInactivityTimeoutSeconds = timeout;
         beatsHeandlerThreadCount = threadCount;
         workGroup = new NioEventLoopGroup();
+        maxPendingBatchesPerEventLoop = maxPendingBatches / beatsHeandlerThreadCount;
+
     }
 
     public void enableSSL(SslSimpleBuilder builder) {
@@ -46,7 +54,7 @@ public class Server {
         try {
             logger.info("Starting server on port: " +  this.port);
 
-            beatsInitializer = new BeatsInitializer(isSslEnable(), messageListener, clientInactivityTimeoutSeconds, beatsHeandlerThreadCount);
+            beatsInitializer = new BeatsInitializer(isSslEnable(), messageListener, clientInactivityTimeoutSeconds, beatsHeandlerThreadCount, maxPendingBatchesPerEventLoop);
 
             ServerBootstrap server = new ServerBootstrap();
             server.group(workGroup)
@@ -103,13 +111,16 @@ public class Server {
 
         private boolean enableSSL = false;
 
-        public BeatsInitializer(Boolean secure, IMessageListener messageListener, int clientInactivityTimeoutSeconds, int beatsHandlerThread) {
+        public BeatsInitializer(Boolean secure, IMessageListener messageListener, int clientInactivityTimeoutSeconds, int beatsHandlerThread, int maxPendingBatchesPerEventLoop) {
             enableSSL = secure;
             this.message = messageListener;
             this.clientInactivityTimeoutSeconds = clientInactivityTimeoutSeconds;
             idleExecutorGroup = new DefaultEventExecutorGroup(DEFAULT_IDLESTATEHANDLER_THREAD);
-            beatsHandlerExecutorGroup = new DefaultEventExecutorGroup(beatsHandlerThread);
-
+            // Best attempt to reject events past a threshold of pending batches.
+            // Profiling shows once the channel is connected, 1 tasks per handler and 1 for the Netty task to handle memory management.
+            final int BATCH_TO_TASK_MULTIPLIER = 3;  //2 handlers, 1 netty task
+            beatsHandlerExecutorGroup = new DefaultEventExecutorGroup(beatsHandlerThread, null, maxPendingBatchesPerEventLoop * BATCH_TO_TASK_MULTIPLIER
+                    , new LoggingRejectedExecutionHandler());
         }
 
         public void initChannel(SocketChannel socket) throws IOException, NoSuchAlgorithmException, CertificateException {
@@ -119,9 +130,10 @@ public class Server {
                 SslHandler sslHandler = sslBuilder.build(socket.alloc());
                 pipeline.addLast(SSL_HANDLER, sslHandler);
             }
-            pipeline.addLast(idleExecutorGroup, IDLESTATE_HANDLER, new IdleStateHandler(clientInactivityTimeoutSeconds, IDLESTATE_WRITER_IDLE_TIME_SECONDS , clientInactivityTimeoutSeconds));
+            pipeline.addLast(idleExecutorGroup, IDLESTATE_HANDLER, new IdleStateHandler(clientInactivityTimeoutSeconds, IDLESTATE_WRITER_IDLE_TIME_SECONDS , 0));
             pipeline.addLast(BEATS_ACKER, new AckEncoder());
             pipeline.addLast(KEEP_ALIVE_HANDLER, new ConnectionHandler());
+            //if changing the number of handlers in the beatsHandlerExecutorGroup, update the BATCH_TO_TASK_MULTIPLIER
             pipeline.addLast(beatsHandlerExecutorGroup, new BeatsParser(), new BeatsHandler(this.message));
         }
 
@@ -144,4 +156,26 @@ public class Server {
             }
         }
     }
+
+    class LoggingRejectedExecutionHandler implements RejectedExecutionHandler {
+
+
+        @Override
+        public void rejected(Runnable task, SingleThreadEventExecutor executor) {
+
+            //TODO: Figure out the proper the downcast here...I am pretty sure there is a way!
+            ((DefaultChannelPipeline)task).channel().close();
+
+          //  long now = System.currentTimeMillis();
+            final String MESSAGE = "Rejected beats batch due to lack of resources. Try to increase the max_pending_batches and/or executor_threads. " +
+                    "Additional memory and CPU may be required when increasing those values.";
+          //  if (now - lastRejectMessage > 1) {
+                logger.warn(MESSAGE);
+         //       lastRejectMessage = now;
+          //  }else{
+          //      logger.trace(MESSAGE);
+         //   }
+        }
+    }
+
 }

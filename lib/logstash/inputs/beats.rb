@@ -119,6 +119,10 @@ class LogStash::Inputs::Beats < LogStash::Inputs::Base
   # Close Idle clients after X seconds of inactivity.
   config :client_inactivity_timeout, :validate => :number, :default => 60
 
+  # The TCP service will start rejecting connections after this many pending batches. This value needs to be high enough to handle the max number of concurrent connections.
+  # However, if the pipeline is blocked, or ingestion is too fast, this will need to raised. Increasing this value will result in additional memory usage (both native and heap).
+  config :max_pending_batches, :validate => :number, :default => 256
+
   # Beats handler executor thread
   config :executor_threads, :validate => :number, :default => LogStash::Config::CpuCoreStrategy.maximum
 
@@ -159,7 +163,7 @@ class LogStash::Inputs::Beats < LogStash::Inputs::Base
   end # def register
 
   def create_server
-    server = org.logstash.beats.Server.new(@host, @port, @client_inactivity_timeout, @executor_threads)
+    server = org.logstash.beats.Server.new(@host, @port, @client_inactivity_timeout, @executor_threads, @max_pending_batches)
     if @ssl
 
       begin
