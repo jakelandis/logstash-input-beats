@@ -10,7 +10,7 @@ import io.netty.util.AttributeKey;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Manages the connection state to the beats client.
@@ -18,11 +18,11 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ConnectionHandler extends ChannelDuplexHandler {
     private final static Logger logger = LogManager.getLogger(ConnectionHandler.class);
 
-    public static AttributeKey<AtomicLong> CHANNEL_PENDING_COUNTER = AttributeKey.valueOf("channel-pending-counter");
+    public static AttributeKey<AtomicBoolean> CHANNEL_SEND_KEEP_ALIVE = AttributeKey.valueOf("channel-send-keep-alive");
 
     @Override
     public void channelActive(final ChannelHandlerContext ctx) throws Exception {
-        ctx.channel().attr(CHANNEL_PENDING_COUNTER).set(new AtomicLong(0));
+        ctx.channel().attr(CHANNEL_SEND_KEEP_ALIVE).set(new AtomicBoolean(false));
         if (logger.isTraceEnabled()) {
             logger.trace("{}: channel activated", ctx.channel().id().asShortText());
         }
@@ -31,13 +31,14 @@ public class ConnectionHandler extends ChannelDuplexHandler {
 
     /**
      * {@inheritDoc}
-     * Increments the pending counter. {@link BeatsHandler} will decrement it. It is important that this handler comes before the {@link BeatsHandler} in the channel pipeline.
+     * Sets the flag that the keep alive should be sent. {@link BeatsHandler} will un-set it. It is important that this handler comes before the {@link BeatsHandler} in the channel pipeline.
+     * Note - For large payloads, this method may be called many times more often then the BeatsHandler#channelRead due to decoder aggregating the payload.
      */
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        ctx.channel().attr(CHANNEL_PENDING_COUNTER).get().getAndIncrement();
+        ctx.channel().attr(CHANNEL_SEND_KEEP_ALIVE).get().set(true);
         if (logger.isDebugEnabled()) {
-            logger.debug("{}: batches pending: {}", ctx.channel().id().asShortText(),ctx.channel().attr(CHANNEL_PENDING_COUNTER).get().get());
+            logger.debug("{}: batches pending: {}", ctx.channel().id().asShortText(),ctx.channel().attr(CHANNEL_SEND_KEEP_ALIVE).get().get());
         }
         super.channelRead(ctx, msg);
     }
@@ -65,7 +66,7 @@ public class ConnectionHandler extends ChannelDuplexHandler {
         if (evt instanceof IdleStateEvent) {
             e = (IdleStateEvent) evt;
             if (e.state() == IdleState.WRITER_IDLE) {
-                if (hasPending(ctx)) {
+                if (sendKeepAlive(ctx)) {
                     ChannelFuture f = ctx.writeAndFlush(new Ack(Protocol.VERSION_2, 0));
                     if (logger.isTraceEnabled()) {
                         logger.trace("{}: sending keep alive ack to libbeat", ctx.channel().id().asShortText());
@@ -96,16 +97,16 @@ public class ConnectionHandler extends ChannelDuplexHandler {
     }
 
     /**
-     * Determine if this channel has processed all of it's batches. Note - for this to work, the following must be true:
+     * Determine if this channel has finished processing it's payload. If it has not, send a TCP keep alive. Note - for this to work, the following must be true:
      * <ul>
      *     <li>This Handler comes before the {@link BeatsHandler} in the channel's pipeline</li>
      *     <li>This Handler is associated to an {@link io.netty.channel.EventLoopGroup} that has guarantees that the associated {@link io.netty.channel.EventLoop} will never block.</li>
-     *     <li>The {@link BeatsHandler} decrements the counter only after it has processed the batch.</li>
+     *     <li>The {@link BeatsHandler} un-sets only after it has processed this channel's payload.</li>
      * </ul>
-     * @param ctx the {@link ChannelHandlerContext} used to curry the counter.
-     * @return  Returns true if this channel/connection has batches that have not been processed yet. False otherwise (the channel is empty of pending batches).
+     * @param ctx the {@link ChannelHandlerContext} used to curry the flag.
+     * @return  Returns true if this channel/connection has NOT finished processing it's payload. False otherwise.
      */
-     public boolean hasPending(ChannelHandlerContext ctx) {
-        return  ctx.channel().hasAttr(CHANNEL_PENDING_COUNTER)  && ctx.channel().attr(CHANNEL_PENDING_COUNTER).get().get() > 0;
+     public boolean sendKeepAlive(ChannelHandlerContext ctx) {
+        return  ctx.channel().hasAttr(CHANNEL_SEND_KEEP_ALIVE)  && ctx.channel().attr(CHANNEL_SEND_KEEP_ALIVE).get().get();
     }
 }

@@ -63,9 +63,10 @@ public class BeatsHandler extends SimpleChannelInboundHandler<Batch> {
                 }
             }
         }finally{
-            ctx.channel().attr(ConnectionHandler.CHANNEL_PENDING_COUNTER).get().getAndDecrement();
+            //this channel is done processing this payload, instruct the connection handler to stop sending TCP keep alive
+            ctx.channel().attr(ConnectionHandler.CHANNEL_SEND_KEEP_ALIVE).get().set(false);
             if (logger.isDebugEnabled()) {
-                logger.debug("{}: batches pending: {}", ctx.channel().id().asShortText(),ctx.channel().attr(ConnectionHandler.CHANNEL_PENDING_COUNTER).get().get());
+                logger.debug("{}: batches pending: {}", ctx.channel().id().asShortText(),ctx.channel().attr(ConnectionHandler.CHANNEL_SEND_KEEP_ALIVE).get().get());
             }
             batch.release();
             ctx.flush();

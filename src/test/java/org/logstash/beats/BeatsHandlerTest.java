@@ -8,7 +8,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -36,7 +36,7 @@ public class BeatsHandlerTest {
 
         @Override
         public void onNewConnection(ChannelHandlerContext ctx) {
-            ctx.channel().attr(ConnectionHandler.CHANNEL_PENDING_COUNTER).set(new AtomicLong(0));
+            ctx.channel().attr(ConnectionHandler.CHANNEL_SEND_KEEP_ALIVE).set(new AtomicBoolean(false));
             onNewConnectionCalled = true;
         }
 
