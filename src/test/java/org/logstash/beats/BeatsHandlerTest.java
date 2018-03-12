@@ -36,7 +36,7 @@ public class BeatsHandlerTest {
 
         @Override
         public void onNewConnection(ChannelHandlerContext ctx) {
-            ctx.channel().attr(KeepAliveHandler.CHANNEL_PENDING_COUNTER).set(new AtomicLong(0));
+            ctx.channel().attr(ConnectionHandler.CHANNEL_PENDING_COUNTER).set(new AtomicLong(0));
             onNewConnectionCalled = true;
         }
 

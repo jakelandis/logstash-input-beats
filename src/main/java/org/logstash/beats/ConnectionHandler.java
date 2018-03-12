@@ -14,10 +14,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Manages the connection state to the beats client.
- * TODO: rename to ConnectionHandler
  */
-public class KeepAliveHandler extends ChannelDuplexHandler {
-    private final static Logger logger = LogManager.getLogger(KeepAliveHandler.class);
+public class ConnectionHandler extends ChannelDuplexHandler {
+    private final static Logger logger = LogManager.getLogger(ConnectionHandler.class);
 
     public static AttributeKey<AtomicLong> CHANNEL_PENDING_COUNTER = AttributeKey.valueOf("channel-pending-counter");
 
